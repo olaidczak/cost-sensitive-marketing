@@ -2,7 +2,6 @@ import pandas as pd
 import numpy as np
 from sklearn.feature_selection import mutual_info_classif, f_classif
 from sklearn.metrics import roc_auc_score
-from sklearn.inspection import permutation_importance
 from sklearn.ensemble import RandomForestClassifier
 from boruta import BorutaPy
 
