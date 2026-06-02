@@ -167,15 +167,15 @@ def perform_random_search_cv(X_train, y_train, seed, k_values, n_iter, subsets):
                         "kind": kind,
                         "model": name,
                         "cv_score": random_search.best_score_,
+                        "cv_score_std": random_search.cv_results_["std_test_custom"][bi],
                         "features": features,
                         "best_params": random_search.best_params_,
                         "accuracy": random_search.cv_results_["mean_test_accuracy"][bi],
-                        "balanced_accuracy": random_search.cv_results_[
-                            "mean_test_balanced_accuracy"
-                        ][bi],
-                        "precision": random_search.cv_results_["mean_test_precision"][
-                            bi
-                        ],
+                        "accuracy_std": random_search.cv_results_["std_test_accuracy"][bi],
+                        "balanced_accuracy": random_search.cv_results_["mean_test_balanced_accuracy"][bi],
+                        "balanced_accuracy_std": random_search.cv_results_["std_test_balanced_accuracy"][bi],
+                        "precision": random_search.cv_results_["mean_test_precision"][bi],
+                        "precision_std": random_search.cv_results_["std_test_precision"][bi],
                     }
                 )
                 # print(f"    Finished {name}")
