@@ -3,6 +3,7 @@ import pandas as pd
 from sklearn.model_selection import (
     StratifiedKFold,
     RandomizedSearchCV,
+    train_test_split,
 )
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
@@ -99,6 +100,147 @@ def custom_score(y_true, y_pred, n_var):
     tp = np.sum((y_true == 1) & (y_pred == 1))
     fp = np.sum((y_true == 0) & (y_pred == 1))
     return tp * 10 - fp * 5 - n_var * 200
+
+
+def project_score(y_true_sorted, k, n_vars):
+    """Score when contacting the top-k customers (sorted by descending proba)."""
+    pred = np.zeros(len(y_true_sorted), dtype=int)
+    pred[:k] = 1
+    return custom_score(y_true_sorted, pred, n_vars)
+
+
+def best_cutoff(proba, y_true, n_vars, cap):
+    """
+    Sweep k = 1..cap and return (best_threshold, best_k, best_score).
+    Threshold is the probability of the last selected customer at best_k.
+    """
+    order = np.argsort(-proba)
+    y_sorted = y_true[order]
+    p_sorted = proba[order]
+
+    best_score = -np.inf
+    best_k = 1
+    n = min(cap, len(y_sorted))
+
+    for k in range(1, n + 1):
+        s = project_score(y_sorted, k, n_vars)
+        if s > best_score:
+            best_score = s
+            best_k = k
+
+    best_thresh = float(p_sorted[best_k - 1])  # prob of the marginal customer
+    return best_thresh, best_k, best_score
+
+
+def evaluate_holdout(
+    k, results, X, y, top=20, max_contacts=1000, seeds=None, save_csv=True
+):
+    """
+    Repeated hold-out evaluation for the top-`top` shortlisted models at a given k.
+
+    For each shortlisted model:
+      For each seed:
+        - Split labeled data 50/50 train/val (stratified)
+        - Fit the pipeline on train
+        - On val: sweep number of contacts 1..max_contacts, pick best score
+        - Record val score, precision, number of contacts at that operating point
+      Aggregate across seeds: mean ± std
+
+    Scoring rule (project spec):
+        Score = 10*TP - 5*FP - 200*NoVariables
+
+    Returns the summary DataFrame sorted by the stability-penalised criterion.
+    """
+    models = get_models()
+    if seeds is None:
+        seeds = [2910 + i for i in range(20)]
+
+    top20_models = results[results["k"] == k].head(top)
+    per_split = {i: [] for i in range(top)}
+
+    for i in range(top):
+        row = top20_models.iloc[i]
+        features = eval(row["features"])
+        params = eval(row["best_params"])
+        n_vars = len(features)
+        model_key = row["model"]
+        base_clf = clone(models[model_key][0])
+        pipeline = Pipeline(
+            [
+                ("scaler", StandardScaler()),
+                ("clf", base_clf),
+            ]
+        )
+
+        for s in seeds:
+            Xtr, Xva, ytr, yva = train_test_split(
+                X[features],
+                y,
+                test_size=0.5,
+                stratify=y,
+                random_state=s,
+            )
+            pipeline.set_params(**params)
+            pipeline.fit(Xtr, ytr)
+
+            # Score on validation
+            proba_val = pipeline.predict_proba(Xva)[:, 1]
+            best_thresh, best_k, best_val = best_cutoff(
+                proba_val, np.asarray(yva), n_vars, max_contacts
+            )
+
+            # Precision at the chosen operating point
+            order_val = np.argsort(-proba_val)
+            y_sorted = np.asarray(yva)[order_val]
+            tp_val = int((y_sorted[:best_k] == 1).sum())
+            precision_val = tp_val / best_k if best_k > 0 else 0.0
+
+            per_split[i].append(
+                {
+                    "seed": s,
+                    "val_thresh": best_thresh,
+                    "val_score": best_val,
+                    "contacts": best_k,
+                    "precision_val": precision_val,
+                    "n_vars": n_vars,
+                    "features": features,
+                    "model": model_key,
+                    "params":params
+                }
+            )
+
+    # Aggregate results
+    summary_rows = []
+    for i in range(top):
+        records = per_split[i]
+        val_scores = np.array([r["val_score"] for r in records])
+        contacts = np.array([r["contacts"] for r in records])
+        precisions = np.array([r["precision_val"] for r in records])
+
+        summary_rows.append(
+            {
+                "rank": i,
+                "model": records[0]["model"],
+                "n_vars": records[0]["n_vars"],
+                "features": records[0]["features"],
+                "params": records[0]["params"],
+                "mean_val_score": val_scores.mean(),
+                "std_val_score": val_scores.std(),
+                # stability-penalised criterion (lower variance preferred)
+                "penalised_score": val_scores.mean() - val_scores.std(),
+                "mean_contacts": contacts.mean(),
+                "mean_precision": precisions.mean(),
+            }
+        )
+
+    summary_df = (
+        pd.DataFrame(summary_rows)
+        .sort_values("penalised_score", ascending=False)
+        .reset_index(drop=True)
+    )
+    if save_csv:
+        summary_df.to_csv(f"{k}_res.csv", index=False)
+    return summary_df
 
 
 def score_with_thresh(y_true, y_pred, n_var, thresh):
