@@ -21,7 +21,7 @@ Python 3.13.7 was utilized
 ```
 
 ## Repository structure
-
+```
 ├── data/
 │   ├── x_test.txt
 │   ├── x_train.txt
