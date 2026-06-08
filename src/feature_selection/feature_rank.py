@@ -8,6 +8,19 @@ from boruta import BorutaPy
 
 
 def info_features(X, y, top=50, return_raw=False):
+    """Rank features by AUC, mutual information, Mann-Whitney U, and Boruta, and return the top ones by mean rank.
+
+    Parameters
+    ----------
+    X : pandas.DataFrame
+        Feature matrix (columns are variables).
+    y : array-like
+        Binary target labels (0/1).
+    top : int, default 50
+        Number of top-ranked features to return.
+    return_raw : bool, default False
+        If True, also return the raw per-method scores DataFrame.
+    """
     n, p = X.shape
 
     # Mutual Information

@@ -30,6 +30,7 @@ SEED = 3105
 SEED_MODELS = SEED
 SEED_RANDOM_SEARCH = SEED
 def get_models():
+    """Return a dict of candidate classifiers paired with their hyperparameter search spaces."""
     models = {
         "XGBoost": (
             XGBClassifier(random_state=SEED_MODELS, verbosity=0, eval_metric="logloss", seed=SEED_MODELS),
@@ -93,6 +94,17 @@ def get_models():
 
 
 def custom_score(y_true, y_pred, n_var):
+    """Project score: 10 per true positive, minus 5 per false positive, minus 200 per used variable.
+
+    Parameters
+    ----------
+    y_true : array-like
+        True binary labels (0/1).
+    y_pred : array-like
+        Predicted binary labels (0/1).
+    n_var : int
+        Number of variables used by the model.
+    """
     # when using do:
     # from sklearn.metrics import make_scorer
     # scorer = make_scorer(custom_score, greater_is_better=True)
@@ -103,7 +115,17 @@ def custom_score(y_true, y_pred, n_var):
 
 
 def project_score(y_true_sorted, k, n_vars):
-    """Score when contacting the top-k customers (sorted by descending proba)."""
+    """Score when contacting the top-k customers (sorted by descending proba).
+
+    Parameters
+    ----------
+    y_true_sorted : array-like
+        True labels sorted by descending predicted probability.
+    k : int
+        Number of top customers to contact.
+    n_vars : int
+        Number of variables used by the model.
+    """
     pred = np.zeros(len(y_true_sorted), dtype=int)
     pred[:k] = 1
     return custom_score(y_true_sorted, pred, n_vars)
@@ -113,6 +135,17 @@ def best_cutoff(proba, y_true, n_vars, cap):
     """
     Sweep k = 1..cap and return (best_threshold, best_k, best_score).
     Threshold is the probability of the last selected customer at best_k.
+
+    Parameters
+    ----------
+    proba : array-like
+        Predicted probabilities of the positive class.
+    y_true : array-like
+        True binary labels (0/1).
+    n_vars : int
+        Number of variables used by the model.
+    cap : int
+        Maximum number of customers that can be contacted.
     """
     order = np.argsort(-proba)
     y_sorted = y_true[order]
@@ -140,16 +173,35 @@ def evaluate_holdout(
 
     For each shortlisted model:
       For each seed:
-        - Split labeled data 50/50 train/val (stratified)
+        - Split labeled data 50/50 train/val
         - Fit the pipeline on train
         - On val: sweep number of contacts 1..max_contacts, pick best score
         - Record val score, precision, number of contacts at that operating point
       Aggregate across seeds: mean ± std
 
-    Scoring rule (project spec):
+    Scoring rule:
         Score = 10*TP - 5*FP - 200*NoVariables
 
-    Returns the summary DataFrame sorted by the stability-penalised criterion.
+    Returns the summary DataFrame sorted by criterion means(Score)-std.
+
+    Parameters
+    ----------
+    k : int
+        Variable-count budget; selects the rows of `results` to evaluate.
+    results : pandas.DataFrame
+        CV results table with columns `k`, `features`, `best_params`, `model`.
+    X : pandas.DataFrame
+        Feature matrix.
+    y : array-like
+        True binary labels (0/1).
+    top : int, default 20
+        Number of top-ranked models to evaluate.
+    max_contacts : int, default 1000
+        Maximum number of customers that can be contacted.
+    seeds : list of int, optional
+        Random seeds for the train/val splits (defaults to 20 seeds).
+    save_csv : bool, default True
+        Whether to write the summary to `{k}_res.csv`.
     """
     models = get_models()
     if seeds is None:
@@ -244,6 +296,19 @@ def evaluate_holdout(
 
 
 def score_with_thresh(y_true, y_pred, n_var, thresh):
+    """Score predictions above `thresh`, capped at 20% of customers, returning (score, n_contacts).
+
+    Parameters
+    ----------
+    y_true : array-like
+        True binary labels (0/1).
+    y_pred : array-like
+        Predicted probabilities/scores of the positive class.
+    n_var : int
+        Number of variables used by the model.
+    thresh : float
+        Probability threshold above which a customer is contacted.
+    """
     # returns the score taking threshold into account and max contacts
     max_contact = int(round(len(y_true) * 0.2))
     pred = np.zeros(len(y_true), dtype=int)
@@ -256,7 +321,13 @@ def score_with_thresh(y_true, y_pred, n_var, thresh):
 
 # custom scorer to use in cv
 def make_cap_scorer(n_vars):
-    """Capped competition scorer for a model that uses `n_vars` features."""
+    """Capped competition scorer for a model that uses `n_vars` features.
+
+    Parameters
+    ----------
+    n_vars : int
+        Number of variables used by the model (drives the score penalty).
+    """
 
     def cap_score(y_true, y_prob):
         n = len(y_true)
@@ -270,6 +341,23 @@ def make_cap_scorer(n_vars):
 
 
 def perform_random_search_cv(X_train, y_train, seed, k_values, n_iter, subsets):
+    """Run randomized hyperparameter search over all models and feature subsets, returning a ranked results DataFrame.
+
+    Parameters
+    ----------
+    X_train : pandas.DataFrame
+        Training feature matrix.
+    y_train : array-like
+        Training labels (0/1).
+    seed : int
+        Random seed for the StratifiedKFold splits.
+    k_values : iterable of int
+        Variable-count budgets to evaluate.
+    n_iter : int
+        Number of parameter settings sampled per model in the search.
+    subsets : dict
+        Maps each k to a list of (kind, features) feature subsets to try.
+    """
     # seed relates to StratifiedKFold not Random Search, random serach seed is the same all the time
     cv = StratifiedKFold(n_splits=3, shuffle=True, random_state=seed)
     results = []
